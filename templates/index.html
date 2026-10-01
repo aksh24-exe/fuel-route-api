@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fuel Route</title>
+
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+      integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw=="
+      crossorigin="anonymous" referrerpolicy="no-referrer">
+
+<style>
+  :root{
+    --bg:#EBEDE8; --surface:#FBFCFA; --surface-2:#F2F4F0;
+    --ink:#171C18; --muted:#5A635C; --line:#CFD5CD;
+    --primary:#1E5B3A; --primary-soft:#DDEBE1;
+    --amber:#9C5F10; --amber-soft:#F7E8CE;
+    --danger:#8C2F2F; --danger-soft:#F6E4E4;
+    --display:"Archivo Narrow",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--body); font-size:14px; line-height:1.5;
+    display:flex; flex-direction:column;
+  }
+
+  header{
+    background:var(--surface); border-bottom:1px solid var(--line);
+    padding:14px 20px; display:flex; align-items:flex-end;
+    gap:12px 18px; flex-wrap:wrap; flex:none;
+    position:relative; z-index:1000;
+  }
+  h1{
+    font-family:var(--display); font-size:22px; font-weight:700;
+    margin:0 8px 6px 0; letter-spacing:.01em;
+  }
+  form{display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px 12px; flex:1}
+  .field{position:relative; flex:1; min-width:220px}
+  label{display:flex; flex-direction:column; gap:4px; min-width:0}
+  label span{
+    font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted);
+  }
+  input[type="text"]{
+    font:inherit; color:var(--ink); background:var(--surface);
+    border:1px solid var(--line); border-radius:2px; padding:8px 10px;
+    width:100%;
+  }
+  input[type="text"]:focus{outline:2px solid var(--primary); outline-offset:1px}
+  button{
+    font:600 14px var(--body); color:#FBFCFA; background:var(--primary);
+    border:1px solid var(--primary); border-radius:2px; padding:9px 16px;
+    cursor:pointer;
+  }
+  button:disabled{opacity:.55; cursor:progress}
+  button:focus{outline:2px solid var(--primary); outline-offset:2px}
+  .suggestions{
+    position:absolute; z-index:1000; left:0; right:0; top:calc(100% + 4px);
+    margin:0; padding:4px 0; list-style:none;
+    background:var(--surface); border:1px solid var(--line);
+    max-height:280px; overflow-y:auto;
+    box-shadow:0 8px 24px rgba(23,28,24,.12);
+  }
+  .suggestions button{
+    display:block; width:100%; text-align:left; background:transparent; color:var(--ink);
+    border:0; border-radius:0; padding:7px 12px; font-weight:400; cursor:pointer;
+  }
+  .suggestions button[aria-selected="true"]{background:var(--primary-soft)}
+  .suggestions .more{
+    padding:6px 12px 8px; font-family:var(--mono); font-size:11px; color:var(--muted);
+  }
+
+  .notice{
+    margin:0; padding:10px 20px; background:var(--amber-soft); color:var(--ink);
+    border-bottom:1px solid var(--line);
+  }
+  .notice.error{background:var(--danger-soft); color:var(--danger)}
+
+  #intro{
+    max-width:640px; margin:48px auto; padding:0 20px;
+  }
+  #intro h2{
+    font-family:var(--display); font-size:28px; font-weight:700; margin:0 0 8px;
+  }
+  #intro p{margin:0 0 10px; color:var(--muted)}
+
+  #workspace{flex:1; display:flex; flex-direction:column; min-height:0}
+  .stats{
+    background:var(--surface); border-bottom:1px solid var(--line);
+    padding:10px 20px; display:flex; align-items:baseline; gap:10px 22px;
+    flex-wrap:wrap; flex:none;
+  }
+  .stat{display:flex; align-items:baseline; gap:6px; white-space:nowrap}
+  .stat .k{
+    font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted);
+  }
+  .stat .v{font-family:var(--mono); font-size:14px; font-variant-numeric:tabular-nums}
+  .stat.save .v{color:var(--primary); font-weight:600}
+  .spacer{flex:1}
+  .json-link{
+    font-family:var(--mono); font-size:12px; color:var(--primary);
+  }
+
+  .stage{flex:1; display:flex; min-height:0}
+  #map{flex:1; min-width:0; min-height:360px; background:var(--surface-2)}
+  aside{
+    width:330px; flex:none; background:var(--surface);
+    border-left:1px solid var(--line); overflow-y:auto;
+  }
+  @media (max-width:820px){
+    html,body{height:auto; min-height:100%}
+    #workspace,.stage{flex:none}
+    .stage{flex-direction:column}
+    #map{height:52vh; min-height:280px; flex:none}
+    aside{width:auto; border-left:none; border-top:1px solid var(--line); overflow:visible}
+  }
+
+  .aside-head{
+    padding:12px 16px; border-bottom:1px solid var(--line);
+    font-family:var(--mono); font-size:10px; letter-spacing:.11em;
+    text-transform:uppercase; color:var(--muted);
+    position:sticky; top:0; background:var(--surface); z-index:1;
+  }
+  .stop{
+    display:grid; grid-template-columns:30px 1fr; gap:0 12px;
+    padding:13px 16px; border-bottom:1px solid var(--line);
+  }
+  .pin{
+    width:26px; height:26px; border-radius:50%; background:var(--amber);
+    color:#FBFCFA; font-family:var(--mono); font-size:13px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .stop-body{min-width:0; display:flex; flex-direction:column; gap:3px}
+  .stop-name{font-weight:600; font-size:13.5px; line-height:1.3}
+  .stop-place{font-size:12.5px; color:var(--muted)}
+  .stop-nums{
+    display:flex; gap:14px; flex-wrap:wrap; margin-top:3px;
+    font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
+  }
+  .stop-nums b{color:var(--amber); font-weight:600}
+  .stop-mile{font-family:var(--mono); font-size:11px; color:var(--muted)}
+  .empty{padding:24px 16px; color:var(--muted); font-size:13.5px}
+  .totals{padding:14px 16px; background:var(--surface-2); border-bottom:1px solid var(--line)}
+  .totals-row{
+    display:flex; justify-content:space-between; gap:12px; padding:3px 0;
+    font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+  }
+  .totals-row .lbl{color:var(--muted)}
+  .totals-row.big{
+    font-size:15px; font-weight:600; padding-top:8px; margin-top:5px;
+    border-top:1px solid var(--line);
+  }
+  .totals-row.big .val{color:var(--primary)}
+  .leaflet-popup-content{font-family:var(--body); font-size:13px; margin:10px 12px}
+  .leaflet-popup-content .pop-name{font-weight:600; display:block; margin-bottom:3px}
+  .leaflet-popup-content .pop-num{
+    font-family:var(--mono); font-size:12px; color:var(--muted);
+    display:block; font-variant-numeric:tabular-nums;
+  }
+</style>
+</head>
+<body data-route-url="{{ route_url }}" data-places-url="{{ places_url }}">
+
+<header>
+  <h1>Fuel Route</h1>
+  <form id="plan">
+    <div class="field">
+      <label>
+        <span>From</span>
+        <input id="start" name="start" type="text" required value="Chicago, IL"
+               autocomplete="off" role="combobox" aria-autocomplete="list"
+               aria-expanded="false" aria-controls="start-list">
+      </label>
+      <ul id="start-list" class="suggestions" role="listbox" hidden></ul>
+    </div>
+    <div class="field">
+      <label>
+        <span>To</span>
+        <input id="finish" name="finish" type="text" required value="Dallas, TX"
+               autocomplete="off" role="combobox" aria-autocomplete="list"
+               aria-expanded="false" aria-controls="finish-list">
+      </label>
+      <ul id="finish-list" class="suggestions" role="listbox" hidden></ul>
+    </div>
+    <button id="go" type="submit">Plan route</button>
+  </form>
+</header>
+
+<p id="notice" class="notice" hidden></p>
+
+<section id="intro">
+  {% if place_count %}
+    <h2>Pick two cities.</h2>
+    <p>
+      From and To search all {{ place_count }} US places. The gazetteer file
+      holds {{ row_count }} spellings; alternate spellings of one place are a
+      single choice. Type a name, pick it from the list, then plan the route.
+    </p>
+    <p>
+      The page calls the route API and shows the road, the fuel stops, and
+      what the fuel costs. The truck starts with a full tank: 500 miles at 10 mpg.
+    </p>
+  {% else %}
+    <h2>City list is unavailable.</h2>
+    <p>The gazetteer file is missing, so there are no cities to choose from yet.</p>
+  {% endif %}
+</section>
+
+<div id="workspace" hidden>
+  <div class="stats">
+    <div class="stat"><span class="k">distance</span><span class="v" id="stat-distance"></span></div>
+    <div class="stat"><span class="k">drive</span><span class="v" id="stat-drive"></span></div>
+    <div class="stat"><span class="k">fuel</span><span class="v" id="stat-fuel"></span></div>
+    <div class="stat"><span class="k">stops</span><span class="v" id="stat-stops"></span></div>
+    <div class="stat save"><span class="k">saved</span><span class="v" id="stat-saved"></span></div>
+    <span class="spacer"></span>
+    <a class="json-link" id="json-link" target="_blank" rel="noopener">View JSON</a>
+  </div>
+  <div class="stage">
+    <div id="map"></div>
+    <aside id="stops"></aside>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+        integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+  'use strict';
+
+  var routeUrl = document.body.getAttribute('data-route-url');
+  var placesUrl = document.body.getAttribute('data-places-url');
+  var form = document.getElementById('plan');
+  var button = document.getElementById('go');
+  var notice = document.getElementById('notice');
+  var intro = document.getElementById('intro');
+  var workspace = document.getElementById('workspace');
+  var stopsEl = document.getElementById('stops');
+  var map = null;
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function setNotice(message, isError) {
+    if (!message) {
+      notice.hidden = true;
+      notice.textContent = '';
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = message;
+    notice.className = isError ? 'notice error' : 'notice';
+  }
+
+  function decodePolyline(encoded) {
+    var points = [], index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      var shift = 0, result = 0, byte;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      shift = 0; result = 0;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      points.push([lat / 1e5, lng / 1e5]);
+    }
+    return points;
+  }
+
+  function renderStops(payload) {
+    var totals = payload.totals;
+    var vehicle = payload.vehicle;
+    var html = '' +
+      '<div class="totals">' +
+        '<div class="totals-row"><span class="lbl">Gallons purchased</span><span class="val">' + totals.gallons_purchased + '</span></div>' +
+        '<div class="totals-row"><span class="lbl">Tank / range</span><span class="val">' + vehicle.tank_capacity_gallons + ' gal · ' + vehicle.max_range_miles + ' mi</span></div>' +
+        '<div class="totals-row"><span class="lbl">Cost per mile</span><span class="val">$' + totals.fuel_cost_per_mile + '</span></div>' +
+        '<div class="totals-row"><span class="lbl">At corridor average $' + totals.baseline_price_per_gallon + '</span><span class="val">$' + totals.baseline_cost + '</span></div>' +
+        '<div class="totals-row big"><span class="lbl">Saved</span><span class="val">$' + totals.savings + '</span></div>' +
+      '</div>' +
+      '<div class="aside-head">Fuel stops · ' + payload.meta.truckstops_in_corridor +
+        ' truckstops within ' + payload.meta.max_detour_miles + ' mi of the route</div>';
+
+    if (!payload.fuel_stops.length) {
+      html += '<div class="empty">No fuel stop needed. At ' + vehicle.start_gallons +
+        ' gallons the vehicle covers all ' + payload.route.total_distance_miles +
+        ' miles on the fuel it starts with.</div>';
+    }
+
+    payload.fuel_stops.forEach(function (stop) {
+      html += '<div class="stop"><div class="pin">' + stop.sequence + '</div><div class="stop-body">' +
+        '<span class="stop-name">' + escapeHtml(stop.truckstop_name) + '</span>' +
+        '<span class="stop-place">' + escapeHtml(stop.city) + ', ' + escapeHtml(stop.state) + '</span>' +
+        '<div class="stop-nums"><span><b>' + stop.gallons + '</b> gal</span>' +
+        '<span>$' + stop.price_per_gallon + '/gal</span>' +
+        '<span><b>$' + stop.cost + '</b></span></div>' +
+        '<span class="stop-mile">mile ' + stop.route_offset_miles + ' · ' +
+        stop.detour_miles + ' mi off route</span></div></div>';
+    });
+    stopsEl.innerHTML = html;
+  }
+
+  function drawMap(payload) {
+    if (typeof L === 'undefined') {
+      throw new Error('Leaflet did not load');
+    }
+    if (map) {
+      map.remove();
+      map = null;
+    }
+    var line = payload.route.geometry_encoded
+      ? decodePolyline(payload.route.geometry_encoded)
+      : payload.route.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
+
+    map = L.map('map', { scrollWheelZoom: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    var road = L.polyline(line, { color: '#1E5B3A', weight: 4, opacity: 0.85 }).addTo(map);
+
+    function endpoint(place, label, colour) {
+      return L.circleMarker([place.latitude, place.longitude], {
+        radius: 7, color: colour, fillColor: colour, fillOpacity: 1, weight: 2
+      }).bindPopup('<span class="pop-name">' + label + '</span>' +
+                   '<span class="pop-num">' + escapeHtml(place.query) + '</span>');
+    }
+    endpoint(payload.start, 'Start', '#1E5B3A').addTo(map);
+    endpoint(payload.finish, 'Finish', '#171C18').addTo(map);
+
+    payload.fuel_stops.forEach(function (stop) {
+      L.marker([stop.latitude, stop.longitude], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="width:26px;height:26px;border-radius:50%;background:#9C5F10;' +
+                'color:#FBFCFA;font:600 13px ui-monospace,Menlo,monospace;display:flex;' +
+                'align-items:center;justify-content:center;border:2px solid #FBFCFA;' +
+                'box-shadow:0 1px 3px rgba(0,0,0,.4)">' + stop.sequence + '</div>',
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        })
+      }).bindPopup(
+        '<span class="pop-name">' + escapeHtml(stop.truckstop_name) + '</span>' +
+        '<span class="pop-num">' + escapeHtml(stop.city) + ', ' + escapeHtml(stop.state) + '</span>' +
+        '<span class="pop-num">$' + stop.price_per_gallon + '/gal · ' +
+        stop.gallons + ' gal · $' + stop.cost + '</span>'
+      ).addTo(map);
+    });
+
+    map.fitBounds(road.getBounds(), { padding: [34, 34] });
+    setTimeout(function () { map.invalidateSize(); }, 0);
+  }
+
+  function showPayload(payload, requestUrl) {
+    intro.hidden = true;
+    workspace.hidden = false;
+    document.getElementById('stat-distance').textContent = payload.route.total_distance_miles + ' mi';
+    document.getElementById('stat-drive').textContent = payload.route.estimated_drive_time_hours + ' h';
+    document.getElementById('stat-fuel').textContent = '$' + payload.totals.total_fuel_cost;
+    document.getElementById('stat-stops').textContent = String(payload.fuel_stops.length);
+    document.getElementById('stat-saved').textContent =
+      '$' + payload.totals.savings + ' (' + payload.totals.savings_percent + '%)';
+    var jsonLink = document.getElementById('json-link');
+    jsonLink.href = requestUrl;
+    setNotice(
+      payload.meta.routing_api_calls + ' routing call' +
+      (payload.meta.routing_api_calls === 1 ? '' : 's') +
+      ' · ' + payload.meta.elapsed_ms + ' ms',
+      false
+    );
+    renderStops(payload);
+    try {
+      drawMap(payload);
+    } catch (error) {
+      setNotice('The fuel plan is ready, but the map could not be drawn.', true);
+    }
+  }
+
+  function bindSuggest(input, list) {
+    var requestId = 0;
+    var active = -1;
+
+    function close() {
+      list.hidden = true;
+      list.innerHTML = '';
+      input.setAttribute('aria-expanded', 'false');
+      active = -1;
+    }
+
+    function choose(label) {
+      input.value = label;
+      close();
+      input.focus();
+    }
+
+    function render(places, matched) {
+      list.innerHTML = '';
+      active = places.length ? 0 : -1;
+      if (!places.length) {
+        list.innerHTML = '<li class="more">No matching place</li>';
+      }
+      places.forEach(function (label, index) {
+        var item = document.createElement('li');
+        var option = document.createElement('button');
+        option.type = 'button';
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', index === active ? 'true' : 'false');
+        option.textContent = label;
+        option.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          choose(label);
+        });
+        item.appendChild(option);
+        list.appendChild(item);
+      });
+      if (matched > places.length) {
+        var more = document.createElement('li');
+        more.className = 'more';
+        more.textContent = 'Showing ' + places.length + ' of ' + matched + '. Keep typing.';
+        list.appendChild(more);
+      }
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function markActive() {
+      var options = list.querySelectorAll('button');
+      options.forEach(function (option, index) {
+        option.setAttribute('aria-selected', index === active ? 'true' : 'false');
+      });
+      if (options[active]) options[active].scrollIntoView({ block: 'nearest' });
+    }
+
+    function load() {
+      var current = ++requestId;
+      var url = placesUrl + '?q=' + encodeURIComponent(input.value.trim());
+      fetch(url, { headers: { 'Accept': 'application/json' } })
+        .then(function (response) { return response.json(); })
+        .then(function (body) {
+          if (current !== requestId || document.activeElement !== input) return;
+          render(body.places || [], body.matched || 0);
+        })
+        .catch(function () {
+          if (current === requestId) close();
+        });
+    }
+
+    input.addEventListener('focus', load);
+    input.addEventListener('input', load);
+    input.addEventListener('keydown', function (event) {
+      var options = list.querySelectorAll('button');
+      if (list.hidden || !options.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        active = (active + 1) % options.length;
+        markActive();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        active = (active - 1 + options.length) % options.length;
+        markActive();
+      } else if (event.key === 'Escape') {
+        close();
+      } else if (event.key === 'Enter' && active >= 0) {
+        event.preventDefault();
+        choose(options[active].textContent);
+      }
+    });
+    input.addEventListener('blur', function () {
+      setTimeout(close, 120);
+    });
+  }
+
+  bindSuggest(document.getElementById('start'), document.getElementById('start-list'));
+  bindSuggest(document.getElementById('finish'), document.getElementById('finish-list'));
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var start = document.getElementById('start').value.trim();
+    var finish = document.getElementById('finish').value.trim();
+    var params = new URLSearchParams({ start: start, finish: finish });
+    var requestUrl = routeUrl + '?' + params.toString();
+
+    button.disabled = true;
+    setNotice('Planning the route…', false);
+
+    fetch(requestUrl, { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, body: body };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          var message = (result.body.error && result.body.error.message) || 'The route could not be planned.';
+          setNotice(message, true);
+          return;
+        }
+        showPayload(result.body, requestUrl);
+      })
+      .catch(function () {
+        setNotice('The route API could not be reached.', true);
+      })
+      .then(function () {
+        button.disabled = false;
+      });
+  });
+})();
+</script>
+</body>
+</html>

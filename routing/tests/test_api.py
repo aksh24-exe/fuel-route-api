@@ -12,7 +12,7 @@ import math
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from routing.models import FuelStation
@@ -44,6 +44,30 @@ def stub_route(distance_miles: float = 600.0, from_cache: bool = False) -> Route
         from_cache=from_cache,
         encoded='',
     )
+
+
+class HomePageTests(SimpleTestCase):
+    """The city picker is the page opened in a browser."""
+
+    def test_it_offers_cities_and_points_at_the_route_api(self):
+        response = self.client.get(reverse('home'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'index.html')
+        self.assertContains(response, 'Chicago, IL')
+        self.assertContains(response, 'Dallas, TX')
+        self.assertContains(response, reverse('routing:route'))
+        self.assertContains(response, reverse('routing:places'))
+        self.assertEqual(
+            response['Referrer-Policy'], 'strict-origin-when-cross-origin'
+        )
+
+    def test_place_search_covers_the_whole_gazetteer(self):
+        response = self.client.get(reverse('routing:places'), {'q': 'big cabin'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertGreater(body['count'], 100_000)
+        self.assertGreater(body['rows'], body['count'])
+        self.assertIn('Big Cabin, OK', body['places'])
 
 
 class RouteEndpointTests(TestCase):

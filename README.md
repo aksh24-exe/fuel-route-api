@@ -53,13 +53,31 @@ python manage.py load_fuel_prices
 python manage.py runserver
 ```
 
-Then open <http://127.0.0.1:8000/api/route/?start=Chicago,%20IL&finish=Dallas,%20TX&format=html>.
+Then open <http://127.0.0.1:8000/>, pick two cities, and plan the route. The same result is available directly as <http://127.0.0.1:8000/api/route/?start=Chicago,%20IL&finish=Dallas,%20TX&format=html>.
 
 **No API keys are needed.** That was a deliberate constraint: OSRM's public demo
 server, the GeoNames gazetteer and OpenStreetMap tiles are all free and
 keyless, so this repository runs immediately after cloning.
 
 `load_fuel_prices` takes a few seconds and makes **no network calls** — see below.
+
+---
+
+## Deploying on EC2
+
+The image runs Gunicorn. SQLite is not copied into the image. The container writes `db.sqlite3` to `/data`, and Compose bind-mounts that directory to `./.data` on the instance, so the database stays on the EC2 disk when you rebuild.
+
+On the instance, after Docker is installed and port 8000 is open in the security group:
+
+```bash
+git clone <this repository>
+cd fuel-route-api
+DJANGO_ALLOWED_HOSTS=<public-ip-or-dns> docker compose up -d --build
+```
+
+Open `http://<public-ip>:8000/`. The first start migrates and loads the fuel prices into `./.data/db.sqlite3`. Later starts reuse that file.
+
+The instance needs outbound HTTPS so it can reach the OSRM demo server. Set `DJANGO_SECRET_KEY` to a long random value before anyone else can reach the box. `DJANGO_ALLOWED_HOSTS=*` is enough for a first check; replace it with the instance's public IP or DNS name after that.
 
 ---
 
@@ -258,7 +276,7 @@ tie-break on detour, and the detour is reported per stop so you can see it.
 uv run manage.py test
 ```
 
-88 tests, ~0.4 s, and **no network access** — the routing call is stubbed, which
+94 tests, ~0.9 s, and **no network access** — the routing call is stubbed, which
 is also the cleanest way to assert the thing the brief asks about: that one
 request makes exactly one call, and a repeat makes none.
 
@@ -286,7 +304,10 @@ routing/
     build_gazetteer.py              dev tool: GeoNames → committed gazetteer
     load_fuel_prices.py             CSV → database, geocoded offline
   tests/                            88 tests
-templates/map.html                  Leaflet map
+templates/index.html                city picker; calls the route API
+templates/map.html                  Leaflet map for ?format=html
+Dockerfile                          image for EC2
+docker-compose.yml                  publishes port 8000 and keeps SQLite on the host
 data/
   fuel-prices-for-be-assessment.csv the supplied price file
   us_gazetteer.csv.gz               190,795 keys, committed

@@ -16,6 +16,7 @@ import time
 
 from django.conf import settings
 from django.shortcuts import render
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,7 +24,14 @@ from rest_framework.views import APIView
 from .serializers import RouteQuerySerializer
 from .services.corridor import RoutePath, get_station_index, thin_candidates
 from .services.geo import haversine_miles
-from .services.geocode import GazetteerMissing, GeocodeError, Place, geocode
+from .services.geocode import (
+    GazetteerMissing,
+    GeocodeError,
+    Place,
+    geocode,
+    get_place_index,
+    search_places,
+)
 from .services.optimizer import (
     InfeasibleRoute,
     plan_fuel_stops,
@@ -42,6 +50,46 @@ def _error(message: str, code: str, http_status: int, **extra) -> Response:
     body = {'error': {'code': code, 'message': message}}
     body['error'].update(extra)
     return Response(body, status=http_status)
+
+
+def home(request):
+    """City picker. The page calls ``GET /api/route/`` and draws the answer."""
+    try:
+        index = get_place_index()
+        place_count = len(index.entries)
+        row_count = index.row_count
+    except GazetteerMissing:
+        place_count = 0
+        row_count = 0
+    return render(
+        request,
+        'index.html',
+        {
+            'place_count': place_count,
+            'row_count': row_count,
+            'route_url': reverse('routing:route'),
+            'places_url': reverse('routing:places'),
+        },
+    )
+
+
+class PlacesView(APIView):
+    """``GET /api/places/?q=<text>``
+
+    Searches every place in the gazetteer. The response lists the closest
+    matches; ``count`` is how many distinct places exist in total.
+    """
+
+    def get(self, request):
+        try:
+            payload = search_places(request.query_params.get('q', ''))
+        except GazetteerMissing as error:
+            return _error(
+                str(error),
+                'gazetteer_missing',
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(payload)
 
 
 class RouteView(APIView):

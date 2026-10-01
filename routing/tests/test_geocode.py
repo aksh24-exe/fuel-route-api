@@ -5,10 +5,12 @@ from django.test import SimpleTestCase
 from routing.services.geocode import (
     GeocodeError,
     geocode,
+    get_place_index,
     normalize_place,
     normalize_state,
     place_keys,
     primary_key,
+    search_places,
 )
 
 
@@ -109,3 +111,34 @@ class GeocodeErrorTests(SimpleTestCase):
     def test_out_of_range_latitude_is_rejected(self):
         with self.assertRaises(GeocodeError):
             geocode('120.0,-96.0')
+
+
+class PlaceSearchTests(SimpleTestCase):
+    """The picker searches every distinct place, not a short list of big cities."""
+
+    def test_the_index_keeps_one_spelled_out_name_per_place(self):
+        index = get_place_index()
+        labels = [place.label for place in index.entries]
+        self.assertGreater(index.row_count, 190_000)
+        self.assertGreater(len(labels), 100_000)
+        self.assertLess(len(labels), index.row_count)
+        self.assertEqual(labels.count('Chicago, IL'), 1)
+        self.assertEqual(labels.count('New York City, NY'), 1)
+        self.assertIn('Fort Worth, TX', labels)
+        self.assertNotIn('Ft Worth, TX', labels)
+        self.assertIn('Big Cabin, OK', labels)
+
+    def test_a_typed_query_reaches_a_small_town_and_a_spelling_variant(self):
+        self.assertIn('Big Cabin, OK', search_places('big cabin')['places'])
+        fort_worth = search_places('ft worth')['places']
+        self.assertIn('Fort Worth, TX', fort_worth)
+        self.assertNotIn('Ft Worth, TX', fort_worth)
+
+    def test_an_empty_query_starts_with_the_largest_city(self):
+        places = search_places('')['places']
+        self.assertEqual(places[0], 'New York City, NY')
+
+    def test_a_picker_label_is_a_valid_route_query(self):
+        for label in ('Chicago, IL', 'Dallas, TX', 'New York City, NY', 'Fort Worth, TX', 'Big Cabin, OK'):
+            place = geocode(label)
+            self.assertEqual(place.source, 'gazetteer')

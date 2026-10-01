@@ -36,6 +36,11 @@ ALLOWED_HOSTS = os.environ.get(
     'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1],testserver'
 ).split(',')
 
+# OpenStreetMap's tile servers answer with a blocked tile when the browser
+# sends no Referer. same-origin strips it on that cross-origin request;
+# strict-origin-when-cross-origin sends the site origin and nothing more.
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+
 
 # Application definition
 
@@ -85,10 +90,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+# SQLITE_PATH points at a file on the host when the app runs in Docker, so the
+# database lives on the EC2 instance and survives an image rebuild.
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('SQLITE_PATH', BASE_DIR / 'db.sqlite3'),
     }
 }
 

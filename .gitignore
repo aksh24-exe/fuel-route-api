@@ -8,5 +8,6 @@ db.sqlite3
 !.env.example
 *.log
 .DS_Store
+.data/
 # Django
 /staticfiles/

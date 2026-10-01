@@ -17,12 +17,14 @@ resulting error of a few miles does not change which stops are optimal.
 
 from __future__ import annotations
 
+import bisect
 import csv
 import gzip
 import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from django.conf import settings
 
@@ -279,6 +281,11 @@ class Gazetteer:
 # both paying to parse it.
 _gazetteer: Gazetteer | None = None
 _gazetteer_lock = threading.Lock()
+_place_index: PlaceIndex | None = None
+
+# How many matches the city picker shows at once. The index itself holds every
+# place; the cap only keeps the open list short enough to choose from.
+PICKER_RESULT_LIMIT = 20
 
 
 def get_gazetteer() -> Gazetteer:
@@ -291,11 +298,196 @@ def get_gazetteer() -> Gazetteer:
     return _gazetteer
 
 
+def _display_name(key: str) -> str:
+    """Turn ``SAINT LOUIS`` into ``Saint Louis``, which the geocoder still accepts."""
+    return ' '.join(part.capitalize() for part in key.split())
+
+
+class _Place(NamedTuple):
+    label: str
+    name_key: str
+    state: str
+    population: int
+
+
+class PlaceIndex:
+    """Every distinct place in the gazetteer, with prefix indexes for search.
+
+    Spelling variants that share a coordinate collapse to the longest name,
+    which is the spelled-out form ("Fort Worth", not "Ft Worth"). ``row_count``
+    is the raw gazetteer size, including those variants.
+    """
+
+    __slots__ = ('entries', 'row_count', 'name_keys', 'word_keys', 'by_population')
+
+    def __init__(
+        self,
+        entries: tuple[_Place, ...],
+        row_count: int,
+        name_keys: list[tuple[str, int]],
+        word_keys: list[tuple[str, int]],
+        by_population: list[int],
+    ):
+        self.entries = entries
+        self.row_count = row_count
+        self.name_keys = name_keys
+        self.word_keys = word_keys
+        self.by_population = by_population
+
+
+def _load_place_index() -> PlaceIndex:
+    path = Path(settings.FUEL_ROUTE['GAZETTEER_PATH'])
+    if not path.exists():
+        raise GazetteerMissing(
+            f'Gazetteer not found at {path}. '
+            'Generate it with:  uv run manage.py build_gazetteer'
+        )
+
+    # (state, rounded lat, rounded lon) → (name key, population)
+    grouped: dict[tuple[str, float, float], tuple[str, int]] = {}
+    row_count = 0
+    with gzip.open(path, 'rt', encoding='utf-8', newline='') as handle:
+        for row in csv.reader(handle):
+            if len(row) != 5:
+                continue
+            row_count += 1
+            key, state, lat_text, lon_text, population_text = row
+            population = int(population_text)
+            coord = (state, round(float(lat_text), 3), round(float(lon_text), 3))
+            current = grouped.get(coord)
+            if (
+                current is None
+                or len(key) > len(current[0])
+                or (len(key) == len(current[0]) and key < current[0])
+            ):
+                grouped[coord] = (key, population)
+
+    entries = tuple(
+        _Place(f'{_display_name(name)}, {state}', name, state, population)
+        for (state, _lat, _lon), (name, population) in grouped.items()
+    )
+    name_keys = sorted((place.name_key, index) for index, place in enumerate(entries))
+    word_keys = sorted(
+        (word, index)
+        for index, place in enumerate(entries)
+        for word in place.name_key.split(' ')
+        if word != place.name_key
+    )
+    by_population = sorted(
+        range(len(entries)),
+        key=lambda index: entries[index].population,
+        reverse=True,
+    )
+    return PlaceIndex(entries, row_count, name_keys, word_keys, by_population)
+
+
+def get_place_index() -> PlaceIndex:
+    """The process-wide place index, built on first use."""
+    global _place_index
+    if _place_index is None:
+        with _gazetteer_lock:
+            if _place_index is None:
+                _place_index = _load_place_index()
+    return _place_index
+
+
+def _prefix_span(pairs: list[tuple[str, int]], prefix: str) -> tuple[int, int]:
+    """Slice of ``pairs`` whose key starts with ``prefix``. Pairs are sorted."""
+    start = bisect.bisect_left(pairs, (prefix,))
+    stop = start
+    size = len(pairs)
+    while stop < size and pairs[stop][0].startswith(prefix):
+        stop += 1
+    return start, stop
+
+
+def _states_for(token: str) -> set[str] | None:
+    """State codes the user is narrowing to, or ``None`` when they did not."""
+    if not token:
+        return None
+    if token in US_STATES:
+        return {token}
+    code = STATE_NAME_TO_CODE.get(token)
+    if code:
+        return {code}
+    return {
+        state_code
+        for state_code, name in US_STATES.items()
+        if state_code.startswith(token) or name.startswith(token)
+    }
+
+
+def search_places(query: str, limit: int = PICKER_RESULT_LIMIT) -> dict:
+    """Places matching ``query``, drawn from the whole gazetteer.
+
+    An empty query returns the most populous places, so the list is never
+    blank. A typed query matches the start of the name or of any word in it,
+    and ``"Ft Worth"`` reaches ``"Fort Worth"`` through the same spelling
+    variants the geocoder uses. Results are largest first.
+    """
+    index = get_place_index()
+    limit = max(1, min(limit, 50))
+    text = (query or '').strip()
+    city_text, _, state_text = text.partition(',')
+    allowed_states = _states_for(normalize_place(state_text))
+
+    if not city_text.strip():
+        chosen = [
+            index.entries[place_index]
+            for place_index in index.by_population
+            if allowed_states is None or index.entries[place_index].state in allowed_states
+        ]
+        shown = chosen[:limit]
+        return {
+            'count': len(index.entries),
+            'rows': index.row_count,
+            'matched': len(chosen),
+            'places': [place.label for place in shown],
+        }
+
+    queries = place_keys(city_text) or {normalize_place(city_text)}
+    best_rank: dict[int, int] = {}
+
+    def consider(pairs: list[tuple[str, int]], prefix: str, rank: int) -> None:
+        if not prefix:
+            return
+        start, stop = _prefix_span(pairs, prefix)
+        for position in range(start, stop):
+            place_index = pairs[position][1]
+            place = index.entries[place_index]
+            if allowed_states is not None and place.state not in allowed_states:
+                continue
+            current = best_rank.get(place_index)
+            if current is None or rank < current:
+                best_rank[place_index] = rank
+
+    for prefix in queries:
+        consider(index.name_keys, prefix, 0)
+        consider(index.word_keys, prefix, 1)
+
+    ranked = sorted(
+        best_rank,
+        key=lambda place_index: (
+            best_rank[place_index],
+            -index.entries[place_index].population,
+            index.entries[place_index].label,
+        ),
+    )
+    shown = ranked[:limit]
+    return {
+        'count': len(index.entries),
+        'rows': index.row_count,
+        'matched': len(ranked),
+        'places': [index.entries[place_index].label for place_index in shown],
+    }
+
+
 def reset_gazetteer() -> None:
     """Drop the cached gazetteer. Used by tests and by the build command."""
-    global _gazetteer
+    global _gazetteer, _place_index
     with _gazetteer_lock:
         _gazetteer = None
+        _place_index = None
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,15 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me-before-sharing}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      SQLITE_PATH: /data/db.sqlite3
+    volumes:
+      # The database file is on the machine running Docker, not inside the
+      # image. On EC2 that is the instance disk: ./.data/db.sqlite3
+      - ./.data:/data
+    restart: unless-stopped
