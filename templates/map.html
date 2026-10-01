@@ -1,0 +1,298 @@
+{% load static %}<!doctype html>
+{% comment %}
+The HTML view of a route. The brief asks the API to "return a map of the route
+along with optimal location to fuel up", so the same endpoint that answers in
+JSON renders this when ?format=html is passed.
+
+It draws from the response it was just given - no second request - and decodes
+the routing provider's own polyline so the road keeps its full detail rather
+than the resampled geometry the JSON carries.
+{% endcomment %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ payload.start.query }} &rarr; {{ payload.finish.query }} &middot; Fuel Route</title>
+
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+      integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw=="
+      crossorigin="anonymous" referrerpolicy="no-referrer">
+
+<style>
+  :root{
+    --bg:#EBEDE8; --surface:#FBFCFA; --surface-2:#F2F4F0;
+    --ink:#171C18; --muted:#5A635C; --line:#CFD5CD;
+    --primary:#1E5B3A; --primary-soft:#DDEBE1;
+    --amber:#9C5F10; --amber-soft:#F7E8CE;
+    --display:"Archivo Narrow",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--body); font-size:14px; line-height:1.5;
+    display:flex; flex-direction:column;
+  }
+
+  header{
+    background:var(--surface); border-bottom:1px solid var(--line);
+    padding:14px 20px; display:flex; align-items:baseline;
+    gap:10px 22px; flex-wrap:wrap; flex:none;
+  }
+  h1{
+    font-family:var(--display); font-size:19px; font-weight:700;
+    margin:0; letter-spacing:.01em;
+  }
+  h1 .arrow{color:var(--muted); font-weight:400; margin:0 4px}
+  .stat{display:flex; align-items:baseline; gap:6px; white-space:nowrap}
+  .stat .k{
+    font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted);
+  }
+  .stat .v{font-family:var(--mono); font-size:14px; font-variant-numeric:tabular-nums}
+  .stat.save .v{color:var(--primary); font-weight:600}
+  .spacer{flex:1}
+  .badge{
+    font-family:var(--mono); font-size:11px; padding:3px 9px; border-radius:2px;
+    background:var(--primary-soft); color:var(--primary); border:1px solid var(--primary);
+    white-space:nowrap;
+  }
+
+  main{flex:1; display:flex; min-height:0}
+  #map{flex:1; min-width:0; background:var(--surface-2)}
+
+  aside{
+    width:330px; flex:none; background:var(--surface);
+    border-left:1px solid var(--line); overflow-y:auto;
+  }
+  @media (max-width:820px){
+    main{flex-direction:column}
+    #map{min-height:52vh}
+    aside{width:auto; border-left:none; border-top:1px solid var(--line)}
+  }
+
+  .aside-head{
+    padding:12px 16px; border-bottom:1px solid var(--line);
+    font-family:var(--mono); font-size:10px; letter-spacing:.11em;
+    text-transform:uppercase; color:var(--muted);
+    position:sticky; top:0; background:var(--surface); z-index:1;
+  }
+
+  .stop{
+    display:grid; grid-template-columns:30px 1fr; gap:0 12px;
+    padding:13px 16px; border-bottom:1px solid var(--line);
+  }
+  .pin{
+    width:26px; height:26px; border-radius:50%; background:var(--amber);
+    color:#FBFCFA; font-family:var(--mono); font-size:13px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .stop-body{min-width:0; display:flex; flex-direction:column; gap:3px}
+  .stop-name{font-weight:600; font-size:13.5px; line-height:1.3}
+  .stop-place{font-size:12.5px; color:var(--muted)}
+  .stop-nums{
+    display:flex; gap:14px; flex-wrap:wrap; margin-top:3px;
+    font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
+  }
+  .stop-nums b{color:var(--amber); font-weight:600}
+  .stop-mile{font-family:var(--mono); font-size:11px; color:var(--muted)}
+
+  .empty{padding:24px 16px; color:var(--muted); font-size:13.5px}
+
+  .totals{padding:14px 16px; background:var(--surface-2); border-bottom:1px solid var(--line)}
+  .totals-row{
+    display:flex; justify-content:space-between; gap:12px; padding:3px 0;
+    font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+  }
+  .totals-row .lbl{color:var(--muted)}
+  .totals-row.big{
+    font-size:15px; font-weight:600; padding-top:8px; margin-top:5px;
+    border-top:1px solid var(--line);
+  }
+  .totals-row.big .val{color:var(--primary)}
+
+  .leaflet-popup-content{font-family:var(--body); font-size:13px; margin:10px 12px}
+  .leaflet-popup-content .pop-name{font-weight:600; display:block; margin-bottom:3px}
+  .leaflet-popup-content .pop-num{
+    font-family:var(--mono); font-size:12px; color:var(--muted);
+    display:block; font-variant-numeric:tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>{{ payload.start.query }}<span class="arrow">&rarr;</span>{{ payload.finish.query }}</h1>
+  <div class="stat">
+    <span class="k">distance</span>
+    <span class="v">{{ payload.route.total_distance_miles }} mi</span>
+  </div>
+  <div class="stat">
+    <span class="k">fuel</span>
+    <span class="v">${{ payload.totals.total_fuel_cost }}</span>
+  </div>
+  <div class="stat">
+    <span class="k">stops</span>
+    <span class="v">{{ payload.fuel_stops|length }}</span>
+  </div>
+  <div class="stat save">
+    <span class="k">saved</span>
+    <span class="v">${{ payload.totals.savings }} ({{ payload.totals.savings_percent }}%)</span>
+  </div>
+  <span class="spacer"></span>
+  <span class="badge">
+    {{ payload.meta.routing_api_calls }} routing call{{ payload.meta.routing_api_calls|pluralize }}
+    &middot; {{ payload.meta.elapsed_ms }} ms
+  </span>
+</header>
+
+<main>
+  <div id="map"></div>
+
+  <aside>
+    <div class="totals">
+      <div class="totals-row">
+        <span class="lbl">Gallons purchased</span>
+        <span class="val">{{ payload.totals.gallons_purchased }}</span>
+      </div>
+      <div class="totals-row">
+        <span class="lbl">Tank / range</span>
+        <span class="val">{{ payload.vehicle.tank_capacity_gallons }} gal &middot; {{ payload.vehicle.max_range_miles }} mi</span>
+      </div>
+      <div class="totals-row">
+        <span class="lbl">Cost per mile</span>
+        <span class="val">${{ payload.totals.fuel_cost_per_mile }}</span>
+      </div>
+      <div class="totals-row">
+        <span class="lbl">At corridor average ${{ payload.totals.baseline_price_per_gallon }}</span>
+        <span class="val">${{ payload.totals.baseline_cost }}</span>
+      </div>
+      <div class="totals-row big">
+        <span class="lbl">Saved</span>
+        <span class="val">${{ payload.totals.savings }}</span>
+      </div>
+    </div>
+
+    <div class="aside-head">
+      Fuel stops &middot; {{ payload.meta.truckstops_in_corridor }} truckstops within
+      {{ payload.meta.max_detour_miles }} mi of the route
+    </div>
+
+    {% for stop in payload.fuel_stops %}
+      <div class="stop">
+        <div class="pin">{{ stop.sequence }}</div>
+        <div class="stop-body">
+          <span class="stop-name">{{ stop.truckstop_name }}</span>
+          <span class="stop-place">{{ stop.city }}, {{ stop.state }}</span>
+          <div class="stop-nums">
+            <span><b>{{ stop.gallons }}</b> gal</span>
+            <span>${{ stop.price_per_gallon }}/gal</span>
+            <span><b>${{ stop.cost }}</b></span>
+          </div>
+          <span class="stop-mile">
+            mile {{ stop.route_offset_miles }} &middot; {{ stop.detour_miles }} mi off route
+          </span>
+        </div>
+      </div>
+    {% empty %}
+      <div class="empty">
+        No fuel stop needed. At {{ payload.vehicle.start_gallons }} gallons the
+        vehicle covers all {{ payload.route.total_distance_miles }} miles on the
+        fuel it starts with.
+      </div>
+    {% endfor %}
+  </aside>
+</main>
+
+{{ payload|json_script:"payload-data" }}
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+        integrity="sha512-BwHfrr4c9kmRkLw6iXFdzcdWV/PGkVgiIyIWLLlTSXzWQzxuSg4DiQUCpauz/EWjgk5TYQqX/kvn9pG1NpYfqg=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  var payload = JSON.parse(document.getElementById('payload-data').textContent);
+
+  // The provider's encoded polyline, decoded here so the drawn road keeps its
+  // full detail. The GeoJSON in the response is deliberately resampled to keep
+  // the payload small, which is right for an API and too coarse for a map.
+  function decodePolyline(encoded) {
+    var points = [], index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      var shift = 0, result = 0, byte;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      shift = 0; result = 0;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      points.push([lat / 1e5, lng / 1e5]);
+    }
+    return points;
+  }
+
+  var line = payload.route.geometry_encoded
+    ? decodePolyline(payload.route.geometry_encoded)
+    : payload.route.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
+
+  var map = L.map('map', { scrollWheelZoom: true });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &middot; routing by <a href="https://project-osrm.org/">OSRM</a>'
+  }).addTo(map);
+
+  var road = L.polyline(line, { color: '#1E5B3A', weight: 4, opacity: 0.85 }).addTo(map);
+
+  function endpoint(place, label, colour) {
+    return L.circleMarker([place.latitude, place.longitude], {
+      radius: 7, color: colour, fillColor: colour, fillOpacity: 1, weight: 2
+    }).bindPopup('<span class="pop-name">' + label + '</span>' +
+                 '<span class="pop-num">' + place.query + '</span>');
+  }
+
+  endpoint(payload.start, 'Start', '#1E5B3A').addTo(map);
+  endpoint(payload.finish, 'Finish', '#171C18').addTo(map);
+
+  payload.fuel_stops.forEach(function (stop) {
+    L.marker([stop.latitude, stop.longitude], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="width:26px;height:26px;border-radius:50%;background:#9C5F10;' +
+              'color:#FBFCFA;font:600 13px ui-monospace,Menlo,monospace;display:flex;' +
+              'align-items:center;justify-content:center;border:2px solid #FBFCFA;' +
+              'box-shadow:0 1px 3px rgba(0,0,0,.4)">' + stop.sequence + '</div>',
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      })
+    }).bindPopup(
+      '<span class="pop-name">' + stop.truckstop_name + '</span>' +
+      '<span class="pop-num">' + stop.city + ', ' + stop.state + '</span>' +
+      '<span class="pop-num">$' + stop.price_per_gallon + '/gal &middot; ' +
+      stop.gallons + ' gal &middot; $' + stop.cost + '</span>' +
+      '<span class="pop-num">mile ' + stop.route_offset_miles +
+      ' &middot; ' + stop.detour_miles + ' mi off route</span>'
+    ).addTo(map);
+  });
+
+  map.fitBounds(road.getBounds(), { padding: [34, 34] });
+})();
+</script>
+
+</body>
+</html>

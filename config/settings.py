@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -20,12 +21,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-03@me-tr^9yz+3bkcx4d3!=bf2yr^2yg$_)puq@9k@f&4tj#33'
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-03@me-tr^9yz+3bkcx4d3!=bf2yr^2yg$_)puq@9k@f&4tj#33',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = []
+# 'testserver' is the host Django's own test client sends; it belongs to the
+# development default only. A deployment sets DJANGO_ALLOWED_HOSTS and replaces
+# this list entirely.
+ALLOWED_HOSTS = os.environ.get(
+    'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1],testserver'
+).split(',')
 
 
 # Application definition
@@ -37,6 +46,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # third party
+    'rest_framework',
+    # local
+    'routing',
 ]
 
 MIDDLEWARE = [
@@ -54,7 +67,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -124,4 +137,97 @@ MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
+}
+
+
+# ---------------------------------------------------------------------------
+# REST framework
+# ---------------------------------------------------------------------------
+
+REST_FRAMEWORK = {
+    # The assessment API is public and read-only; there is nothing to
+    # authenticate and no state to protect.
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_PERMISSION_CLASSES': [],
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+    'UNAUTHENTICATED_USER': None,
+    # DRF claims ?format= for its own content negotiation and answers 404 for
+    # any value it does not recognise. The route endpoint uses ?format=html to
+    # return the map, so that claim is released and the view reads the
+    # parameter itself. Content negotiation still works through the Accept
+    # header, which is what the browsable API uses.
+    'URL_FORMAT_OVERRIDE': None,
+}
+
+# ---------------------------------------------------------------------------
+# Caches
+# ---------------------------------------------------------------------------
+#
+# Holds OSRM responses keyed on the rounded coordinate pair, so repeating a
+# query costs zero external calls. Local memory is per process, which is fine
+# for the assessment; a real deployment would point this at Redis and get the
+# same benefit across workers.
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'fuel-route',
+        'TIMEOUT': 60 * 60 * 24,
+        'OPTIONS': {'MAX_ENTRIES': 5000},
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Fuel route configuration
+# ---------------------------------------------------------------------------
+#
+# Everything the routing app can be tuned by lives here rather than as numbers
+# buried in the services, so the assumptions are reviewable in one place.
+
+FUEL_ROUTE = {
+    # --- vehicle, straight from the brief -------------------------------
+    'MAX_RANGE_MILES': 500.0,
+    'MILES_PER_GALLON': 10.0,
+    # Tank capacity is derived: 500 mi / 10 mpg = 50 gal.
+
+    # Fuel in the tank at departure. The brief does not say, and it changes
+    # every figure in the response: an empty tank forces a stop at mile 0,
+    # while a full one means any route under MAX_RANGE_MILES costs nothing.
+    # None means "full"; override per request with ?start_gallons=
+    'START_GALLONS': None,
+
+    # --- corridor -------------------------------------------------------
+    # How far off the route a truckstop may sit and still be a candidate.
+    'MAX_DETOUR_MILES': 5.0,
+    # The route is resampled to one point per this many miles before the
+    # corridor scan. OSRM returns tens of thousands of vertices, which is far
+    # more resolution than a 500-mile range problem needs.
+    'ROUTE_SAMPLE_MILES': 2.0,
+    # Grid cell size for the spatial index, in degrees (~35 mi of latitude).
+    'GRID_CELL_DEGREES': 0.5,
+
+    # --- candidate thinning ---------------------------------------------
+    # Bucket candidates into bins this long and keep only the cheapest few per
+    # bin, which keeps the optimizer fast and the map readable.
+    'CANDIDATE_BIN_MILES': 25.0,
+    'CANDIDATES_PER_BIN': 3,
+
+    # --- routing provider ------------------------------------------------
+    # OSRM's public demo server needs no API key, so a reviewer can clone this
+    # repository and run it without registering for anything.
+    'OSRM_BASE_URL': os.environ.get(
+        'OSRM_BASE_URL', 'https://router.project-osrm.org'
+    ),
+    'OSRM_TIMEOUT_SECONDS': 12.0,
+    # Coordinates are rounded to this many decimals to build the cache key.
+    # Three decimals is roughly 110 m, well inside the error we already carry
+    # from resolving truckstops to their city centre.
+    'OSRM_CACHE_PRECISION': 3,
+
+    # --- data files -------------------------------------------------------
+    'GAZETTEER_PATH': BASE_DIR / 'data' / 'us_gazetteer.csv.gz',
+    'FUEL_PRICES_CSV': BASE_DIR / 'data' / 'fuel-prices-for-be-assessment.csv',
 }
